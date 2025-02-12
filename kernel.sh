@@ -1,9 +1,6 @@
-
 #!/bin/bash
 #
-# Script For Building Android arm64 Kernel
-#
-# Copyright (C) 2021-2023 itsshashanksp <9945shashank@gmail.com>
+# Copyright (C) 2020 Fox kernel project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,7 +28,16 @@ rm -rf out
 rm -rf zip
 rm -rf error.log
 
+echo -e "$green << setup dirs >> \n $white"
+
+# With that setup , the script will set dirs and few important thinks
+
+MY_DIR="${BASH_SOURCE%/*}"
+if [[ ! -d "$MY_DIR" ]]; then MY_DIR="$PWD"; fi
+
 # Now u can chose which things need to be modified
+# CHAT_ID = CHAT_ID of a telegram group/channel
+# API_BOT = api bot of a telegram bot
 #
 # DEVICE = your device codename
 # KERNEL_NAME = the name of ur kranul
@@ -44,29 +50,28 @@ rm -rf error.log
 # HOSST = build host
 # USEER = build user
 #
+# TOOLCHAIN = the toolchain u want to use "gcc/clang"
 
-# Devices
-if [ "$DEVICE_TYPE" == markw  ];
-then
-DEVICE="Redmi 4 Prime (markw)"
-KERNEL_NAME="perf-v1-normal"
+
+
+
+DEVICE="Redmi 4 Prime"
 CODENAME="markw"
+KERNEL_NAME="Prototype-v2-normal"
 
-DEFCONFIG_DEVICE="markw_defconfig"
+DEFCONFIG="markw_defconfig"
 
 AnyKernel="https://github.com/mozzaru/anykernel"
 AnyKernelbranch="master"
-fi
 
-# Kernel build release tag
-KRNL_REL_TAG="$KERNEL_TAG"
-
-HOSST="perf-bag"
+HOSST="Show Buildbot"
 USEER="mozzaru"
 
+TOOLCHAIN="clang"
+
 # setup telegram env
-export BOT_MSG_URL="https://api.telegram.org/bot$API_BOT/sendMessage"
-export BOT_BUILD_URL="https://api.telegram.org/bot$API_BOT/sendDocument"
+export BOT_MSG_URL="https://api.telegram.org/bot$BOT_API/sendMessage"
+export BOT_BUILD_URL="https://api.telegram.org/bot$BOT_API/sendDocument"
 
 tg_post_msg() {
         curl -s -X POST "$BOT_MSG_URL" -d chat_id="$2" \
@@ -94,6 +99,36 @@ tg_error() {
         -F caption="$3Failed to build , check <code>error.log</code>"
 }
 
+# Now let's clone gcc/clang on HOME dir
+# And after that , the script start the compilation of the kernel it self
+# For regen the defconfig . use the regen.sh script
+
+if [ "$TOOLCHAIN" == gcc ]; then
+	if [ ! -d "$HOME/gcc64" ] && [ ! -d "$HOME/gcc32" ]
+	then
+		echo -e "$green << cloning gcc from arter >> \n $white"
+		git clone --depth=1 https://github.com/mvaisakh/gcc-arm64 "$HOME"/gcc64
+		git clone --depth=1 https://github.com/mvaisakh/gcc-arm "$HOME"/gcc32
+	fi
+	export PATH="$HOME/gcc64/bin:$HOME/gcc32/bin:$PATH"
+	export STRIP="$HOME/gcc64/aarch64-elf/bin/strip"
+	export KBUILD_COMPILER_STRING=$("$HOME"/gcc64/bin/aarch64-elf-gcc --version | head -n 1)
+elif [ "$TOOLCHAIN" == proton ]; then
+	if [ ! -d "$HOME/proton_clang" ]
+	then
+		echo -e "$green << cloning proton clang >> \n $white"
+		git clone --depth=1 https://github.com/kdrag0n/proton-clang.git "$HOME"/proton_clang
+	fi
+	export PATH="$HOME/proton_clang/bin:$PATH"
+	export STRIP="$HOME/proton_clang/aarch64-linux-gnu/bin/strip"
+	export KBUILD_COMPILER_STRING=$("$HOME"/proton_clang/bin/clang --version | head -n 1 | perl -pe 's/\(http.*?\)//gs' | sed -e 's/  */ /g' -e 's/[[:space:]]*$//')
+fi
+
+# Setup build process
+
+build_kernel() {
+Start=$(date +"%s")
+
 # clang stuff
 		echo -e "$green << cloning clang >> \n $white"
 		git clone --depth=1 https://gitlab.com/itsshashanksp/android_prebuilts_clang_host_linux-x86_clang-r530567.git  "$HOME"/clang
@@ -106,6 +141,8 @@ tg_error() {
 build_kernel() {
 Start=$(date +"%s")
 
+if [ "$TOOLCHAIN" == clang  ]; then
+	echo clang
 	make -j$(nproc --all) O=out \
                               ARCH=arm64 \
                               LLVM=1 \
@@ -125,7 +162,10 @@ End=$(date +"%s")
 Diff=$(($End - $Start))
 }
 
+export IMG="$MY_DIR"/out/arch/arm64/boot/Image.gz-dtb
+
 # Let's start
+
 echo -e "$green << doing pre-compilation process >> \n $white"
 export ARCH=arm64
 export SUBARCH=arm64
@@ -136,56 +176,52 @@ export KBUILD_BUILD_USER="$USEER"
 
 mkdir -p out
 
-make clean && make mrproper
-make "$DEFCONFIG_COMMON" O=out
-make "$DEFCONFIG_DEVICE" O=out
+make O=out clean && make O=out mrproper
+make "$DEFCONFIG" O=out
 
 echo -e "$yellow << compiling the kernel >> \n $white"
-tg_post_msg "Successful triggered Compiling kernel for $DEVICE $CODENAME" "$CHATID"
+tg_post_msg "<code>Building Image.gz-dtb</code>" "$CHAT_ID"
 
 build_kernel || error=true
 
 DATE=$(date +"%Y%m%d-%H%M%S")
 KERVER=$(make kernelversion)
 
-export IMG="$PWD"/out/arch/arm64/boot/Image.gz
-export dtbo="$PWD"/out/arch/arm64/boot/dtbo.img
-export dtb="$PWD"/out/arch/arm64/boot/dtb.img 
-
         if [ -f "$IMG" ]; then
                 echo -e "$green << Build completed in $(($Diff / 60)) minutes and $(($Diff % 60)) seconds >> \n $white"
         else
                 echo -e "$red << Failed to compile the kernel , Check up to find the error >>$white"
-                tg_post_msg "Kernel failed to compile uploading error log"
-                tg_error "error.log" "$CHATID"
-                tg_post_msg "done" "$CHATID"
+                tg_error "error.log" "$CHAT_ID"
                 rm -rf out
                 rm -rf testing.log
                 rm -rf error.log
-                rm -rf zipsigner-3.0.jar
                 exit 1
+        fi
+ # KernelSU
+# Check if AK3 is KSU version to build KernelSU
+        if [[ "$ANYK_VERSION" == *"KSU"* ]]; then
+    sed -i 's/# CONFIG_KSU is not set/CONFIG_KSU=y/' arch/arm64/configs/markw_defconfig
+    echo -e "$cyan KernelSU option selected and enabled to be built! $white"
         fi
 
         if [ -f "$IMG" ]; then
                 echo -e "$green << cloning AnyKernel from your repo >> \n $white"
-                git clone --depth=1 "$AnyKernel" --single-branch -b "$AnyKernelbranch" zip
+                git clone "$AnyKernel" --single-branch -b "$AnyKernelbranch" zip
                 echo -e "$yellow << making kernel zip >> \n $white"
                 cp -r "$IMG" zip/
-                cp -r "$dtbo" zip/
-                cp -r "$dtb" zip/
                 cd zip
-                export ZIP="$KERNEL_NAME"-"$KRNL_REL_TAG"-"$CODENAME"
-                zip -r9 "$ZIP" * -x .git README.md LICENSE *placeholder
-                curl -sLo zipsigner-3.0.jar https://gitlab.com/itsshashanksp/zipsigner/-/raw/master/bin/zipsigner-3.0-dexed.jar
+                mv Image.gz-dtb zImage
+                export ZIP="$KERNEL_NAME"-"$CODENAME"-"$DATE"
+                zip -r "$ZIP" *
+                curl -sLo zipsigner-3.0.jar https://raw.githubusercontent.com/Hunter-commits/AnyKernel/master/zipsigner-3.0.jar
                 java -jar zipsigner-3.0.jar "$ZIP".zip "$ZIP"-signed.zip
-                tg_post_msg "Kernel successfully compiled uploading ZIP" "$CHATID"
-                tg_post_build "$ZIP"-signed.zip "$CHATID"
-                tg_post_msg "done" "$CHATID"
+                tg_post_msg "<b>=============================</b> %0A <b>× Prototype For Redmi 4 Prime ×</b> %0A <b>=============================</b> %0A%0A <b>Date : </b> <code>$(TZ=Indonesia/Jakarta date)</code> %0A%0A <b>Device Code Name:</b> <code>$CODENAME</code> %0A%0A <b>Kernel Version :</b> <code>$KERVER</code> %0A%0A <b>Developer:</b> @mozzaru86 %0A%0A <b>Channel:</b> t.me/Cooking_kernel_bot %0A%0A <b>Changelog:</b> %0A https://github.com/mozzaru/kernel_port/commits/normal-test #prototype #markw" "$CHAT_ID"
+                tg_post_build "$ZIP"-signed.zip "$CHAT_ID"
                 cd ..
                 rm -rf error.log
                 rm -rf out
                 rm -rf zip
                 rm -rf testing.log
-                rm -rf zipsigner-3.0.jar
                 exit
         fi
+
